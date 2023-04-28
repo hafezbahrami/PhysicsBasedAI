@@ -2,15 +2,75 @@ import csv
 from os import path
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
 import torch
 torch.set_default_dtype(torch.float64)
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
+def load_data_train(
+        dataset_path="./",
+        file_name="input_data.csv",
+        batch_size=100,
+        Shuffle_flag=True
+        ):
+    dataset = MixerDataset(dataset_path=dataset_path, file_name=file_name)
+    data_loader_data = DataLoader(dataset, batch_size, shuffle=Shuffle_flag)
+    return data_loader_data
+
+
+def rmse(y_pred, y_label):
+    rmse_val = torch.sqrt(torch.mean((y_pred - y_label) ** 2))
+    return rmse_val.detach().numpy().item()
+
+
+def projection_matrix(
+        train_data, 
+        input_size = 1,
+        output_size = 1,
+        batch_size = 50,
+        Constraint_Coefs=None
+):
+    if not Constraint_Coefs:
+        Constraint_Coefs = torch.tensor([
+            [1.0, 1.0, 0.0, -1.0, -1.0, 0.0, 0.0]
+        ])
+
+    Constraint_Coefs_transpose = torch.transpose(Constraint_Coefs, 0, 1)
+
+    #Dataset variance
+    Y_var = torch.zeros(output_size)
+    for X, Y in train_data:
+        Y_var += (batch_size)*torch.var(Y, dim=0)
+    Y_var = Y_var/len(train_data.dataset.data)
+
+    #Dataset co-variance matrix
+    Error_co_var = torch.zeros(1 + input_size + output_size, 1 + input_size + output_size)
+    for i in range(0, output_size):
+        Error_co_var[i+input_size, i+input_size] = Y_var[i]
+
+    #G x (Sigma x G^T)
+    denominator = torch.inverse(
+        torch.matmul(
+            Constraint_Coefs, 
+            torch.matmul(Error_co_var, Constraint_Coefs_transpose)
+        )
+    )
+
+    #Projection matrix = I - (Sigma x G^T) x (denominator x G)
+    Projection = torch.eye(Error_co_var.shape[0]) - torch.matmul(
+            torch.matmul(Error_co_var, Constraint_Coefs_transpose), 
+            torch.matmul(denominator, Constraint_Coefs)
+        )
+    
+    G_indep = Projection[input_size:(input_size+output_size),0:input_size]
+    G_dep = Projection[input_size:(input_size+output_size),input_size:(input_size+output_size)]
+    Bias = Projection[input_size:(input_size+output_size), -1]
+    
+    return G_indep, G_dep, Bias
+
 
 class MixerDataset(Dataset):
-    def __init__(self, dataset_path="./", file_name="input_data.csv", transformX=None, transformY=None
+    def __init__(self, dataset_path="./", file_name="input_data.csv",
     ):
         self.data = []
         self.dataset_path = dataset_path
@@ -20,17 +80,9 @@ class MixerDataset(Dataset):
         dataset_location = self._helper(file_name)
         with open(dataset_location, newline="") as f:
             csv_reader = csv.reader(f)
-            for X1, X2, X3, X4, X5, Y1, Y2, Y3, Y4, Y5, Y6, Y7, _, X_syn1, X_syn2, X_syn3, X_syn4, X_syn5 in csv_reader:
-                X = torch.tensor([
-                    float(X1), float(X2), float(X3), float(X4), float(X5), 
-                    float(X_syn1), float(X_syn2), float(X_syn3), float(X_syn4), float(X_syn5), 
-                ])
-                Y = torch.tensor([
-                    float(Y1), float(Y2), float(Y3), float(Y4), float(Y5), float(Y6), float(Y7),
-                ])
-                if transformX and transformY:
-                    X = transformX(X[None, :, None, None]).squeeze()
-                    Y = transformY(Y[None, :, None, None]).squeeze()
+            for X1, X2, X3, Y1, Y2, Y3 in csv_reader:
+                X = torch.tensor([float(X1), float(X2), float(X3)])
+                Y = torch.tensor([float(Y1), float(Y2), float(Y3)])
                 self.data.append((X, Y))
 
     def __len__(self):
@@ -50,36 +102,7 @@ class MixerDataset(Dataset):
         return dataset_location
 
 
-def load_data_train(
-        dataset_path="./",
-        file_name="input_data.csv",
-        batch_size=100,
-        Shuffle_flag=True,
-        transformX=None,
-        transformY=None,
-        ):
-    dataset = MixerDataset(dataset_path=dataset_path, file_name=file_name, transformX=transformX, transformY=transformY)
-    data_loader_data = DataLoader(dataset, batch_size, shuffle=Shuffle_flag)
-    return data_loader_data
-
-
-def rmse(y_pred, y_label):
-    rmse_val = torch.sqrt(torch.mean((y_pred - y_label) ** 2))
-    return rmse_val.detach().numpy().item()
-
-
-def preprocessing(dataset_path="./", file_name="input_data.csv"):
-    """preprocessing data to calculate the mean and std"""
-    dataset_location = path.join(dataset_path, file_name)
-    data = pd.read_csv(dataset_location)
-    avg_data = torch.tensor(data.mean())
-    std_data = torch.tensor(data.std())
-    min_data = torch.tensor(data.min())
-    max_data = torch.tensor(data.max())
-    return min_data, max_data, avg_data, std_data
-
-
-class ValidationPlot:
+class Validation:
     @staticmethod
     def plot_unity(y_pred, y_actual):
         plt.figure(figsize=(8,7), dpi=120)
@@ -129,4 +152,3 @@ class ValidationPlot:
         plt.yticks(fontname="Times New Roman", fontsize=20)
         plt.legend({'Prediction', 'Actual'}, prop={'family':"Times New Roman", 'size':25})
         plt.show()
-

@@ -16,6 +16,7 @@ def train(args):
 
     w_loss = args.weight_fact_syn_data
     optimizer = torch.optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9)
+    # optimizer = torch.optim.RAdam(model.parameters(), lr=args.learning_rate)
     loss_syn = torch.nn.MSELoss(reduction='sum')
     loss_data = torch.nn.MSELoss(reduction='sum')
 
@@ -39,46 +40,52 @@ def train(args):
         loss_vals, err_vals_data, err_vals_constraint, err_vals = [], [], [], []
         for X, Y in train_data:
             X, Y = X.to(device), Y.to(device)
-            X_data, X_syn, Y_data = X[:, :1], X[:, 1:], Y
+            X_data, X_syn, Y_data = X[:, :3], X[:, 3:], Y
 
             y_pred_syn = model(X_syn)
 
-            y3_sgn_lesser = 0.5*(torch.sgn(y_pred_syn-0.48) + 1.)
-            y3_pred_lesser = y3_sgn_lesser * y_pred_syn
-            y3_ideal_lesser = torch.zeros(y3_sgn_lesser.size())
-            loss_val_constraint1 = loss_syn(y3_pred_lesser, y3_ideal_lesser)
-
-            y3_sgn_greater = 0.5*(torch.sgn(y_pred_syn) - 1.)
-            y3_pred_greater = y3_sgn_greater * y_pred_syn
-            y3_ideal_greater = torch.zeros(y3_sgn_greater.size())
-            loss_val_constraint2 = loss_syn(y3_pred_greater, y3_ideal_greater)
-
-            loss_val_constraint = w_loss[0]*loss_val_constraint1 + w_loss[1]*loss_val_constraint2
-
+            # -------------------------------------------------------
+            # Actual data loss
             y_pred_data = model(X_data)
             loss_val_data = loss_data(y_pred_data, Y_data)
 
-            loss_val_constraint = (w_loss[0]*loss_val_constraint1 + w_loss[1]*loss_val_constraint2)/len(w_loss)
+            # -------------------------------------------------------
+            # Taking care of constraint losses
+            # In inequalities we create residuals for outside of bounds, and then will force it to zero through losses
+            y1_sgn_lesser = 0.5*(torch.sgn(y_pred_syn[:, 0]-0.9) + 1.)
+            y1_pred_lesser = y1_sgn_lesser * (y_pred_syn[:, 0]-0.9)
+            y1_ideal_lesser = torch.zeros(y1_sgn_lesser.size())
+            loss_val_constraint1 = loss_syn(y1_pred_lesser, y1_ideal_lesser)
 
-            y_pred_data = model(X_data)
-            loss_val_data = loss_data(y_pred_data, Y_data)
+            y2_sgn_greater = 0.5*(torch.sgn(y_pred_syn[:, 1]-0.3) - 1.)
+            y2_pred_greater = y2_sgn_greater * (y_pred_syn[:, 1]-0.3)
+            y2_ideal_greater = torch.zeros(y2_sgn_greater.size())
+            loss_val_constraint2 = loss_syn(y2_pred_greater, y2_ideal_greater)
+
+            # Equality constraint
+            y1_plus_y2_plus_y3_pred = torch.sum(y_pred_syn, dim=1)
+            sum_c3_X_input = torch.sum(X_syn, dim=1)
+            loss_val_constraint3 = loss_syn(y1_plus_y2_plus_y3_pred, sum_c3_X_input)
+
+            loss_val_constraint = (w_loss[0]*loss_val_constraint1 + w_loss[1]*loss_val_constraint2 +  w_loss[2]*loss_val_constraint3)
 
             loss_val = loss_val_data + loss_val_constraint
             loss_vals.append(loss_val.detach().numpy().item())
 
+            optimizer.zero_grad()
+            loss_val.backward()
+            optimizer.step()
+
             # Recording
             err_val_data = rmse(y_pred_data, Y_data)
-            err_val_constraint1 = rmse(y3_pred_lesser, y3_ideal_lesser)
-            err_val_constraint2 = rmse(y3_pred_greater, y3_ideal_greater)
-            err_val_constraint = (w_loss[0]*err_val_constraint1 + w_loss[1]*err_val_constraint2)/sum(w_loss)
+            err_val_constraint1 = rmse(y1_pred_lesser, y1_ideal_lesser)
+            err_val_constraint2 = rmse(y2_pred_greater, y2_ideal_greater)
+            err_val_constraint3 = rmse(y1_plus_y2_plus_y3_pred, sum_c3_X_input)
+            err_val_constraint = (w_loss[0]*err_val_constraint1 + w_loss[1]*err_val_constraint2 + w_loss[2]*err_val_constraint3)/sum(w_loss)
 
             err_vals_data.append(err_val_data)
             err_vals_constraint.append(err_val_constraint)
             err_vals.append(err_val_data + err_val_constraint)
-
-            optimizer.zero_grad()
-            loss_val.backward()
-            optimizer.step()
 
         avg_loss = sum(loss_vals) / len(loss_vals)
         loss_vals_epoch.append(avg_loss)
@@ -96,28 +103,41 @@ def train(args):
             verr_vals, verr_vals_constraint1, verr_vals_constraint2, verr_vals_constraint3, verr_vals_constraint = [], [], [], [], []
             for X, Y_label in validation_data:
                 X, Y_label = X.to(device), Y_label.to(device)
-                X_data, Y_data = X[:, :1], Y_label
+                X_data, Y_data = X[:, :3], Y_label
                 y_pred_valid_data = model(X_data)
 
                 # Record
                 verr_vals.append(rmse(y_pred_valid_data, Y_label))
                 
-                y3_vpred_sgn_lesser = 0.5*(torch.sgn((y_pred_valid_data)-0.48) + 1.)
-                y3_vpred_lesser = y3_vpred_sgn_lesser * y_pred_valid_data
-                y3_vpred_ideal_lesser = torch.zeros(y3_vpred_sgn_lesser.size())
-                verr_val_constraint2 = rmse(y3_vpred_lesser, y3_vpred_ideal_lesser)
-                verr_vals_constraint2.append(verr_val_constraint2)
-
-                y3_vpred_sgn_greater = 0.5*(torch.sgn(y_pred_valid_data-0.0) - 1.)
-                y3_vpred_greater = y3_vpred_sgn_greater * y_pred_valid_data
-                y3_vpred_ideal_greater = torch.zeros(y3_vpred_sgn_greater.size())
-                verr_val_constraint1 = rmse(y3_vpred_greater, y3_vpred_ideal_greater)
+                y1_vpred_sgn_lesser = 0.5*(torch.sgn((y_pred_valid_data[:, 0])-0.9) + 1.)
+                y1_vpred_lesser = y1_vpred_sgn_lesser * (y_pred_valid_data[:, 0] -0.9)
+                y1_vpred_ideal_lesser = torch.zeros(y1_vpred_sgn_lesser.size())
+                verr_val_constraint1 = rmse(y1_vpred_lesser, y1_vpred_ideal_lesser)
                 verr_vals_constraint1.append(verr_val_constraint1)
 
-                verr_vals_constraint.append((w_loss[0]*err_val_constraint1 + w_loss[1]*err_val_constraint2)/sum(w_loss))
+                y2_vpred_sgn_greater = 0.5*(torch.sgn(y_pred_valid_data[:, 1]-0.3) - 1.)
+                y2_vpred_greater = y2_vpred_sgn_greater * (y_pred_valid_data[:, 1]-0.3)
+                y2_vpred_ideal_greater = torch.zeros(y2_vpred_sgn_greater.size())
+                verr_val_constraint2 = rmse(y2_vpred_greater, y2_vpred_ideal_greater)
+                verr_vals_constraint2.append(verr_val_constraint2)
+                
+                y1_plus_y2_plus_y3_vpred = torch.sum(y_pred_valid_data, dim=1)
+                sum_c3_X_val = torch.sum(X_data, dim=1)
+                verr_val_constraint3 = rmse(y1_plus_y2_plus_y3_vpred, sum_c3_X_val)
+                verr_vals_constraint3.append(verr_val_constraint3)
+
+                verr_vals_constraint.append((w_loss[0]*err_val_constraint1 + w_loss[1]*err_val_constraint2 + w_loss[2]*err_val_constraint3)/sum(w_loss))
 
             print("------------------Y-PLOTS-----------------------")
-            Validation.plot_regular(x_con = [0.0, 0.48],x=X_data.numpy(), y_act=Y_data.numpy(), y_pred=y_pred_valid_data.detach().numpy())
+            # Validation.plot_unity(y_pred=y_pred_valid_data[:, 0].detach().numpy(), y_actual=Y_label[:, 0].numpy())
+            # Validation.plot_unity(y_pred=y_pred_valid_data[:, 1].detach().numpy(), y_actual=Y_label[:, 1].numpy())
+            Validation.plot_unity(y_pred=y_pred_valid_data[:, 2].detach().numpy(), y_actual=Y_label[:, 2].numpy())
+            print("------------------CONSTRAINT-PLOTS-----------------------")
+            Validation.plot_unity_w_constraint(y_con = [0.9], y_pred=y_pred_valid_data[:, 0].detach().numpy(), y_actual=Y_label[:, 0].numpy())
+            Validation.plot_unity_w_constraint(y_con = [0.3], y_pred=y_pred_valid_data[:, 1].detach().numpy(), y_actual=Y_label[:, 1].numpy())
+            Validation.plot_unity(y_pred=y1_plus_y2_plus_y3_vpred.detach().numpy(), y_actual=sum_c3_X_val.detach().numpy())
+            # Validation.plot_regular(x_con = [0.9], x=X_data[:, 0].numpy(), y_act=Y_data[:, 0].numpy(), y_pred=y_pred_valid_data[:, 0].detach().numpy())
+            # Validation.plot_regular(x_con = [0.3], x=X_data[:, 1].numpy(), y_act=Y_data[:, 1].numpy(), y_pred=y_pred_valid_data[:, 1].detach().numpy())
             print("------------------DONE-----------------------")
 
 
@@ -125,11 +145,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-n", "--num_epoch", type=int, default=5001)
     parser.add_argument("-bs", "--batch_size", type=int, default=50)
-    parser.add_argument("-n_x_vec", "--x_vector_size", type=int, default=1)
-    parser.add_argument("-n_y_vec", "--y_vector_size", type=int, default=1)
-    parser.add_argument("-lr", "--learning_rate", type=float, default=5e-5)
+    parser.add_argument("-n_x_vec", "--x_vector_size", type=int, default=3)
+    parser.add_argument("-n_y_vec", "--y_vector_size", type=int, default=3)
+    parser.add_argument("-lr", "--learning_rate", type=float, default=4e-5)
     parser.add_argument("-sh_d", "--shuffle_data", type=bool, default=True)
-    parser.add_argument("-w_syn_loss", "--weight_fact_syn_data", type=float, default=[10.0, 10.0])
+    parser.add_argument("-w_syn_loss", "--weight_fact_syn_data", type=float, default=[150.0, 50.0, 10.0]) # [100.0, 150.0, 50.0]
 
     args = parser.parse_args()
 

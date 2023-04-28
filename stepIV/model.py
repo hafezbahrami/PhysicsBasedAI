@@ -1,7 +1,7 @@
 import torch
 
 class Model(torch.nn.Module):
-    def __init__(self, x_vec_size=5, y_vec_size=4, layers=[20, 20]):
+    def __init__(self, x_vec_size=1, y_vec_size=1, layers=[20, 20]):
         super().__init__()
 
         L = []
