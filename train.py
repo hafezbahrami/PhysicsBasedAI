@@ -50,7 +50,7 @@ def train(args):
     # Define inequality constraints in format LHS > 0. For example the following is:
     # Y1 < 0.9  ==> -Y1 + 0.9 > 0.0
     inequality_constraint = [
-        # [(1., 'y1'), (-0.5,)],
+        [(1., 'y1'), (-0.5,)],
     ]
     EqualityConstraintObj = Constraints(
         equality_constraint=equality_constraint,
@@ -261,7 +261,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-cia", "--constraint_imp_approach", type=str, default="CVP")
     parser.add_argument("-layers", "--layers", type=float, default=[25, 25])
-    parser.add_argument("-n", "--num_epoch", type=int, default=20001)
+    parser.add_argument("-n", "--num_epoch", type=int, default=20001) # 20001
     parser.add_argument("-bs", "--batch_size", type=int, default=50)
     parser.add_argument("-n_x_vec", "--x_vector_size", type=int, default=5)
     parser.add_argument("-n_y_vec", "--y_vector_size", type=int, default=7)
